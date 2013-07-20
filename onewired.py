@@ -1,30 +1,24 @@
 #!/usr/bin/env python
 
-import ow
+import sys
+import time
 import Queue
 import threading
-from time import sleep
-import psycopg2
-import psycopg2.extras
 from socket import socket
-import time
-import logging
 from datetime import datetime
-import redis
+import logging
 from ConfigParser import SafeConfigParser
 
+try:
+    import ow
+except ImportError:
+    print "Please install python-ow"
+    sys.exit(1)
 
-#locationmap = { "crawlspace": ["7C000003A5A5AE28"],
-                #"serverroom": ["E4000003C7184928"],
-                #"livingroom": ["83000003A5A34328"],
-                #"stairs": ["BB000003C7455528", "38000003A5B02E28"],
-                #"garage": ["E2000003A5C5F628"],
-                #"bedroom": ["15000003A5B7A728"],
-                #"attic": ["6A000003A5A62828"],
-                #"office": ["4D0000031BF7B528"],
-                #"guestroom": ["F0000003A5B6C228"],
-                #"outside": ["32000003A5BEEF28"]
-                #}
+
+#import psycopg2
+#import psycopg2.extras
+#import redis
 
 
 class Settings(object):
@@ -62,11 +56,15 @@ class OneWireDaemon(object):
         logging = logging.getLogger()
         self.locationmap = self.cfg.locationmap
         logging.info("OneWireDaemon Init")
+        #self.redis = redis.Redis(host=self.cfg.redis['host'], port=6379, db=0)
         self.threads = []
         self.rawdataqueue = Queue.Queue()
         self.normalizedqueue = Queue.Queue()
+        self.start()
+
+    def start(self):
+        logging.info("OneWireD Starting")
         self.start_threads()
-        self.redis = redis.Redis(host=self.cfg.redis['host'], port=6379, db=0)
         self.wait()
 
 
@@ -81,7 +79,6 @@ class OneWireDaemon(object):
         for t in self.threads:
             t.setDaemon(True)
             t.start()
-
 
     def wait(self):
         for t in self.threads:
@@ -109,7 +106,7 @@ class OneWireReader(threading.Thread):
 
     def ow_reader(self):
         '''just abstracting the 'run' function out for further error handleing'''
-        sleep(5)
+        time.sleep(5)
         while True:
             try:
                 sensordata = self.read_sensors()
@@ -124,7 +121,7 @@ class OneWireReader(threading.Thread):
     def sleeptillminute(self):
         t = datetime.utcnow()
         sleeptime = 60 - (t.second + t.microsecond/1000000.0)
-        sleep(sleeptime)
+        time.sleep(sleeptime)
 
 
     def c_to_f(self, c): # Convert temp c to f
@@ -353,5 +350,9 @@ class OneWireDataLogger(threading.Thread):
 
 
 if __name__ == '__main__':
-    cfg = Settings()
-    owd = OneWireDaemon(locationmap, cfg)
+    if len(sys.argv) == 2:
+        owd = OneWireDaemon(sys.argv[1])
+        owd.start()
+    else:
+        print "I'll need a path to find the config file..."
+        sys.exit(1)
