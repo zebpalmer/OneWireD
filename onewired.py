@@ -18,7 +18,6 @@ except ImportError:
 
 #import psycopg2
 #import psycopg2.extras
-#import redis
 
 
 class Settings(object):
@@ -44,16 +43,14 @@ class Settings(object):
             raise Exception('Error in config file')
 
     def __getattr__(self, name):
-        print 'Config Section Not Found'
+        logging.warn("Config Section Not Found (note: inteligent IDE's will commonly/randomly trigger this)")
         return {}
 
 
 class OneWireDaemon(object):
     def __init__(self, cfgfilepath):
         self.cfg = Settings(cfgfilepath)
-        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] (%(threadName)-10s) %(message)s',
-                            datefmt='%m/%d/%Y %H:%M:%S')
-        logging = logging.getLogger()
+        self.setup_logging()
         self.locationmap = self.cfg.locationmap
         logging.info("OneWireDaemon Init")
         #self.redis = redis.Redis(host=self.cfg.redis['host'], port=6379, db=0)
@@ -61,6 +58,47 @@ class OneWireDaemon(object):
         self.rawdataqueue = Queue.Queue()
         self.normalizedqueue = Queue.Queue()
         self.start()
+
+    def setup_logging(self):
+        logging.root.name = "OneWireD"
+        logging.root.setLevel(logging.DEBUG)  # level must be set equal or lower to any handler (hard coded for now)
+        logformat = logging.Formatter(fmt='%(asctime)s [%(levelname)s] (%(threadName)-10s) %(message)s',
+                                      datefmt='%Y-%m-%d %H:%M:%S')
+
+        streamLogger = logging.StreamHandler()
+        streamLogger.setLevel(self._get_loglevel(self.cfg.onewire['basicloglevel']))
+        streamLogger.setFormatter(logformat)
+        logging.root.addHandler(streamLogger)
+
+        if self.cfg.graylog['enable'].lower() == 'true':
+            self.setup_graylog()
+        logging.info("Logging Initialized")
+
+
+    def setup_graylog(self):
+        try:
+            import graypy
+        except ImportError:
+            logging.critical("Please Install 'graypy'")
+        graypyhandler = graypy.GELFHandler('logs', 12201)
+        logformat = logging.Formatter(fmt='%(asctime)s [%(levelname)s] (%(threadName)-10s) %(message)s',
+                                      datefmt='%Y-%m-%d %H:%M:%S')
+        graypyhandler.setFormatter(logformat)
+        logging.root.addHandler(graypyhandler)
+
+
+    def _get_loglevel(self, loglvl):
+        lvlmap = {'info': logging.INFO,
+                  'warning': logging.WARNING,
+                  'warn': logging.WARNING,
+                  'crit': logging.CRITICAL,
+                  'critical': logging.CRITICAL,
+                  'debug': logging.DEBUG,}
+        try:
+            return lvlmap[loglvl.lower()]
+        except KeyError:
+            raise Exception("Could not determine Log Level")
+
 
     def start(self):
         logging.info("OneWireD Starting")
@@ -70,6 +108,9 @@ class OneWireDaemon(object):
 
     def start_threads(self):
         ow_reader = OneWireReader(self)
+        # In this simplified version and using a small number of sensors,
+        # separate normalizer/datalogger threads aren't needed
+        # but I didn't feel like taking them out
         ow_normalizer = OneWireNormalizer(self)
         ow_datalogger = OneWireDataLogger(self)
         self.threads.append(ow_reader)
@@ -200,6 +241,7 @@ class OneWireNormalizer(threading.Thread):
 
         lm = self.owd.locationmap
         for loc in lm.keys():
+            sensors = lm[loc].split(',')
             try:
                 if len(lm[loc]) == 1:
                     temp = data[lm[loc][0]]
@@ -219,7 +261,6 @@ class OneWireNormalizer(threading.Thread):
 class OneWireDataLogger(threading.Thread):
     def __init__(self, owd):
         self.owd = owd
-        self.postgrestoggle = True
         threading.Thread.__init__(self)
 
 
@@ -234,31 +275,24 @@ class OneWireDataLogger(threading.Thread):
                     pass
 
 
-
-
     def ow_datalogger(self):
         self.setName("OW DataLogger")
         logging.info("OW DataLogger Start")
         while True:
             newdata = self.owd.normalizedqueue.get()
-            logging_data(newdata)
+            self.log_data(newdata)
 
     def log_data(self, newdata):
-        '''we only want to log every other run (at max) to the state_log, hack that'''
         try:
-            if self.postgrestoggle == True:
-                logging_to_postgres(newdata)
-                self.postgrestoggle = False
-            else:
-                self.postgrestoggle = True
+            log_to_postgres(newdata)
         except Exception as e:
             logging.critical("could not log to postgres: {0}".format(e))
         try:
-            logging_to_graphite(newdata)
+            log_to_graphite(newdata)
         except Exception as e:
-            logging.critical("could not log to graphite: {0}".format(e))
+            log.critical("could not log to graphite: {0}".format(e))
         try:
-            logging_to_redis(newdata)
+            log_to_redis(newdata)
         except Exception as e:
             logging.critical("could not log to redis: {0}".format(e))
 
@@ -282,7 +316,8 @@ class OneWireDataLogger(threading.Thread):
                 continue
             last_temp = self.last_state(state_log_type, loc)[1]
             if last_temp == None or abs(float(last_temp) - temp) >= 0.2:
-                insert = "INSERT INTO state_log (ts, type, name, value) VALUES (NOW(), '{0}', '{1}', '{2}');".format(state_log_type, loc, temp)
+                insert = """INSERT INTO state_log (ts, type, name, value)
+                          VALUES (NOW(), '{0}', '{1}', '{2}');""".format(state_log_type, loc, temp)
                 cursor.execute(insert)
         connection.commit()
         connection.close()
@@ -325,27 +360,28 @@ class OneWireDataLogger(threading.Thread):
             for loc in data.keys():
                 if data[loc] == 999:
                     continue
-                if loc == 'outside':
-                    lines.append("cortana.env.external.temp.{0} {1} {2}".format(loc, data[loc], now))
-                else:
-                    lines.append("cortana.env.internal.temp.{0} {1} {2}".format(loc, data[loc], now))
+                lines.append("{0}.{1} {2} {3}".format(self.owd.cfg.graphite['namespace'], loc, data[loc], now))
             message = '\n'.join(lines) + '\n' #all lines must end in a newline
             sock.sendall(message)
             logging.debug(message)
         except Exception as e:
             logging.critical("could not log to graphite: {0}".format(e))
         finally:
-            sock.close()
+            try:
+                sock.close()
+            except Exception:
+                pass
+
 
     def log_to_redis(self, data):
         data = data[1]
         r = self.owd.redis
         for loc in data.keys():
-            rkey = 'cortana:env:raw:temp:{0}'.format(loc)
+            rkey = '{0}:{1}'.format(self.owd.cfg.redis['namespace'], loc)
             logging.debug("REDIS -- loc: {0}, rkey: {1} data: {2}".format(loc, rkey, data[loc]))
-            r.setex(rkey, data[loc], 300)
+            r.setex(rkey, data[loc], int(self.owd.cfg.redis['ttl']))
         logging.debug("New data stored in redis, telling cortana")
-        r.publish('cortana:msg:hvac', 'newdata')
+        #r.publish('cortana:msg:hvac', 'newdata') # can push to pubsub channel on redis,  should be a config option
 
 
 

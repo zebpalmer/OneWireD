@@ -1,5 +1,13 @@
 [onewire]
 controller = localhost:4304
+BasicLogLevel = DEBUG
+
+[graylog]
+enable = false
+loglevel = INFO
+
+[postgresql]
+enable = false
 
 [graphite]
 namespace = onewired
@@ -8,7 +16,8 @@ port = 2003
 
 [redis]
 enabled = False
-#namespace = temperatures.onewired
+ttl = 300
+#namespace = temperatures:onewired
 #host = redis
 #port = 6379
 #db = 0
@@ -27,7 +36,6 @@ bedroom = 15000003A5B7A728
 attic = 6A000003A5A62828
 office = 4D0000031BF7B528
 guestroom = F0000003A5B6C228
-outside = 32000003A5BEEF28
-studio = 32000003A5BEEF28
+studio = B2000003A5BEEF28
 outside = 32000003A5BEEF28
 
