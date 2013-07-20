@@ -1,0 +1,43 @@
+[onewire]
+controller = localhost:4304
+BasicLogLevel = DEBUG
+
+[graylog]
+enable = false
+loglevel = INFO
+
+# no longer supported
+[postgresql]
+enable = false
+
+[graphite]
+enable = true
+namespace = onewired.temps
+host = graphite
+port = 2003
+
+[redis]
+enable = false
+ttl = 300
+#namespace = temperatures:onewired
+#host = redis
+#port = 6379
+#db = 0
+
+
+## Define locations and corresponding 1wire sensor ID's below, multiple sensor ids for one location will
+##result in an average temperature being logged
+
+[locationmap]
+crawlspace = 7C000003A5A5AE28
+serverroom = E4000003C7184928
+livingroom = 83000003A5A34328
+stairs = BB000003C7455528,38000003A5B02E28
+garage = E2000003A5C5F628
+bedroom = 15000003A5B7A728
+attic = 6A000003A5A62828
+office = 4D0000031BF7B528
+guestroom = F0000003A5B6C228
+studio = B2000003A5BEEF28
+outside = 32000003A5BEEF28
+

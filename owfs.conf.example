@@ -1,0 +1,12 @@
+# This is the main OWFS configuration file. You should read the
+# owfs.conf(5) manual page in order to understand the options listed
+# here.
+
+######################## SOURCES ########################
+#
+# With this setup, any client (but owserver) uses owserver on the
+# local machine...
+! server: server = localhost:4304
+server: usb = all
+http: port = 2121
+server: port = localhost:4304
