@@ -6,16 +6,18 @@ BasicLogLevel = DEBUG
 enable = false
 loglevel = INFO
 
+# no longer supported
 [postgresql]
 enable = false
 
 [graphite]
-namespace = onewired
+enable = true
+namespace = onewired.temps
 host = graphite
 port = 2003
 
 [redis]
-enabled = False
+enable = false
 ttl = 300
 #namespace = temperatures:onewired
 #host = redis

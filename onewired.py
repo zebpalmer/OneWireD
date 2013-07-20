@@ -227,34 +227,43 @@ class OneWireNormalizer(threading.Thread):
     def ow_normalizer(self):
         while True:
             newdata = self.owd.rawdataqueue.get()
-            logging.info("Normalizer got item from rawdata queue")
+            logging.debug("Normalizer got item from rawdata queue")
             try:
                 self.owd.normalizedqueue.put(self.normalize(newdata))
             except Exception as e:
-                logging.warning("Error Normalizing: {0}".format(e))
-            logging.info("Normalizer added processed data to queue")
+                logging.warning("Error Normalizing: {0}".format(e), exc_info=1)
+            else:
+                logging.debug("Normalizer added processed data to queue")
 
     def normalize(self, rawdata):
+        '''Only mapped sensors will get normalized/logged'''
         normalized_data = {}
         ts = rawdata[0]
         data = rawdata[1]
 
-        lm = self.owd.locationmap
-        for loc in lm.keys():
-            sensors = lm[loc].split(',')
+        # easier to iterate over locations when multiple sensors are involved
+        for location, sensors in self.owd.locationmap.iteritems():
+            temp = None
             try:
-                if len(lm[loc]) == 1:
-                    temp = data[lm[loc][0]]
-                elif len(lm[loc]) > 1:
-                    temps = [ data[x] for x in lm[loc]]
-                    temp = round((sum(temps) / len(temps)), 3)
-                    for raw_temp in temps:
-                        if abs(temp - raw_temp) > 1.0:
-                            temp = 999
-                normalized_data[loc] = temp
+                if isinstance(sensors, str):
+                    temp = data[sensors]
+                elif isinstance(sensors, list):
+                    temp = self.avgSensors(sensors, data, location, normalized_data)
+                if temp:
+                    normalized_data[location] = temp
             except KeyError:
                 pass
         return (ts, normalized_data)
+
+    def avgSensors(self, sensors, data, location, normalized_data):
+        temps = [ data[x] for x in sensors]
+        temp = round((sum(temps) / len(temps)), 3)
+        for raw_temp in temps:
+            if abs(temp - raw_temp) > 1.0:
+                logging.warn("Multiple Sensors assigned same location must read within 1 degree of each other")
+                logging.warn("Discarding results for '{0}'; temps: {1}".format(location, temps))
+                return None
+        return temp
 
 
 
@@ -283,72 +292,32 @@ class OneWireDataLogger(threading.Thread):
             self.log_data(newdata)
 
     def log_data(self, newdata):
+        self.log_to_logging(newdata)
         try:
-            log_to_postgres(newdata)
+            if self.owd.cfg.graphite['enable'].lower() == 'true':
+                self.log_to_graphite(newdata)
+        except KeyError:
+            logging.warning("Please enable or disable Graphite in the config file")
         except Exception as e:
-            logging.critical("could not log to postgres: {0}".format(e))
+            logging.critical("could not log to graphite: {0}".format(e))
         try:
-            log_to_graphite(newdata)
-        except Exception as e:
-            log.critical("could not log to graphite: {0}".format(e))
-        try:
-            log_to_redis(newdata)
+            if self.owd.cfg.redis['enable'].lower() == 'true':
+                self.log_to_redis(newdata)
+        except KeyError:
+            logging.warning("Please enable or disable Redis in the config file")
         except Exception as e:
             logging.critical("could not log to redis: {0}".format(e))
 
-
-    def log_to_postgres(self, newdata):
-        state_log_type = 'temp'
-        ts = newdata[0]
-        data = newdata[1]
-
-        db = "host='{0}' dbname='{1}' user='{2}' password='{3}'".format(self.owd.cfg.state_log['host'],
-                                                                        self.owd.cfg.state_log['dbname'],
-                                                                        self.owd.cfg.state_log['user'],
-                                                                        self.owd.cfg.state_log['passwd'])
-        connection = psycopg2.connect(db)
-        cursor = connection.cursor()
-        logging.info("feeding data to state_log")
-        for loc in data.keys():
-            last_temp = None
-            temp = round(data[loc], 1)
-            if temp == 999:
-                continue
-            last_temp = self.last_state(state_log_type, loc)[1]
-            if last_temp == None or abs(float(last_temp) - temp) >= 0.2:
-                insert = """INSERT INTO state_log (ts, type, name, value)
-                          VALUES (NOW(), '{0}', '{1}', '{2}');""".format(state_log_type, loc, temp)
-                cursor.execute(insert)
-        connection.commit()
-        connection.close()
-        logging.info("Done feeding data to state_log")
-
-    def last_state(self, stype, sname):
-        db = "host='{0}' dbname='{1}' user='{2}' password='{3}'".format(self.owd.cfg.state_log['host'],
-                                                                        self.owd.cfg.state_log['dbname'],
-                                                                        self.owd.cfg.state_log['user'],
-                                                                        self.owd.cfg.state_log['passwd'])
-        connection = psycopg2.connect(db)
-        cursor = connection.cursor()
-        query = """select ts, value from state_log
-                  where type = '{0}'
-                  and name = '{1}'
-                  order by ts desc
-                  limit 1 ;""".format(stype, sname)
-        cursor.execute(query)
-        results = cursor.fetchall()
-        connection.commit()
-        connection.close()
-        if len(results) == 1:
-            return results[0]
-        else:
-            return (None, None)
+    def log_to_logging(self, newdata):
+        try:
+            for location, temp in newdata[1].iteritems():
+                logging.info("{}: {}".format(location, temp))
+        except KeyError:
+            pass
 
     def log_to_graphite(self, newdata):
         CARBON_SERVER = self.owd.cfg.graphite['host']
         CARBON_PORT = int(self.owd.cfg.graphite['port'])
-        print CARBON_SERVER
-        print CARBON_PORT
         try:
             sock = socket()
             ts = newdata[0]
@@ -363,7 +332,7 @@ class OneWireDataLogger(threading.Thread):
                 lines.append("{0}.{1} {2} {3}".format(self.owd.cfg.graphite['namespace'], loc, data[loc], now))
             message = '\n'.join(lines) + '\n' #all lines must end in a newline
             sock.sendall(message)
-            logging.debug(message)
+            logging.debug("Graphite Message: {0}".format(message))
         except Exception as e:
             logging.critical("could not log to graphite: {0}".format(e))
         finally:
