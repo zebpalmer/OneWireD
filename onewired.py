@@ -74,7 +74,6 @@ class OneWireDaemon(object):
             self.setup_graylog()
         logging.info("Logging Initialized")
 
-
     def setup_graylog(self):
         try:
             import graypy
@@ -86,25 +85,22 @@ class OneWireDaemon(object):
         graypyhandler.setFormatter(logformat)
         logging.root.addHandler(graypyhandler)
 
-
     def _get_loglevel(self, loglvl):
         lvlmap = {'info': logging.INFO,
                   'warning': logging.WARNING,
                   'warn': logging.WARNING,
                   'crit': logging.CRITICAL,
                   'critical': logging.CRITICAL,
-                  'debug': logging.DEBUG,}
+                  'debug': logging.DEBUG}
         try:
             return lvlmap[loglvl.lower()]
         except KeyError:
             raise Exception("Could not determine Log Level")
 
-
     def start(self):
         logging.info("OneWireD Starting")
         self.start_threads()
         self.wait()
-
 
     def start_threads(self):
         ow_reader = OneWireReader(self)
@@ -143,8 +139,6 @@ class OneWireReader(threading.Thread):
                 except Exception:
                     pass
 
-
-
     def ow_reader(self):
         '''just abstracting the 'run' function out for further error handleing'''
         time.sleep(5)
@@ -164,8 +158,7 @@ class OneWireReader(threading.Thread):
         sleeptime = 60 - (t.second + t.microsecond/1000000.0)
         time.sleep(sleeptime)
 
-
-    def c_to_f(self, c): # Convert temp c to f
+    def c_to_f(self, c):  # Convert temp c to f
         temp = (float(c) * 9.0/5.0) + 32.0
         return temp
 
